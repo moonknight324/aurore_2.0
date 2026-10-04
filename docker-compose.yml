@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment: { POSTGRES_USER: aurore, POSTGRES_PASSWORD: aurore, POSTGRES_DB: aurore }
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U aurore"], interval: 5s, retries: 10 }
+
+  postgres_test:
+    image: postgres:16-alpine
+    environment: { POSTGRES_USER: aurore, POSTGRES_PASSWORD: aurore, POSTGRES_DB: aurore_test }
+    ports: ["5433:5432"]
+    tmpfs: [/var/lib/postgresql/data]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U aurore -d aurore_test"], interval: 5s, retries: 10 }
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 5s, retries: 10 }
+
+volumes: { pgdata: {} }
