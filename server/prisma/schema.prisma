@@ -1,0 +1,241 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum ContentStatus {
+  PUBLISHED
+  HIDDEN
+}
+
+enum FactCategory {
+  PLANETS
+  STARS
+  MISSIONS
+  ASTRONAUTS
+  COSMOLOGY
+  OTHER
+}
+
+enum BookmarkType {
+  APOD
+  LAUNCH
+  BLOG
+  FACT
+}
+
+enum ReportReason {
+  SPAM
+  ABUSE
+  MISINFORMATION
+  OTHER
+}
+
+enum ReportStatus {
+  OPEN
+  ACTIONED
+  DISMISSED
+}
+
+model User {
+  id            String   @id @default(uuid())
+  name          String
+  email         String   @unique            // normalize to lowercase in the service
+  passwordHash  String?                     // null for Google-only users
+  googleId      String?  @unique
+  avatarUrl     String?
+  bio           String?
+  role          Role     @default(USER)
+  isBanned      Boolean  @default(false)
+  emailVerified Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  refreshTokens   RefreshToken[]
+  passwordResets  PasswordReset[]
+  blogs           Blog[]
+  comments        Comment[]
+  facts           Fact[]
+  blogLikes       BlogLike[]
+  factLikes       FactLike[]
+  bookmarks       Bookmark[]
+  reportsFiled    Report[] @relation("Reporter")
+  reportsResolved Report[] @relation("Resolver")
+
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String    @unique
+  family    String                          // token family for reuse detection
+  expiresAt DateTime
+  revokedAt DateTime?
+  userAgent String?
+  ip        String?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([family])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}
+
+model PasswordReset {
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("password_resets")
+}
+
+model Blog {
+  id            String        @id @default(uuid())
+  authorId      String
+  title         String
+  slug          String        @unique        // title slug + short random suffix
+  excerpt       String?
+  content       String                       // markdown
+  coverUrl      String?
+  coverPublicId String?                      // Cloudinary id, for deletion
+  tags          String[]                     // lowercase; GIN index (raw SQL)
+  status        ContentStatus @default(PUBLISHED)
+  searchVector  Unsupported("tsvector")? @map("search_vector")  // generated column (raw SQL)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  author    User       @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  comments  Comment[]
+  likes     BlogLike[]
+  bookmarks Bookmark[]
+  reports   Report[]
+
+  @@index([status, createdAt(sort: Desc)])
+  @@index([authorId])
+  @@map("blogs")
+}
+
+model Comment {
+  id        String        @id @default(uuid())
+  blogId    String
+  authorId  String
+  text      String
+  status    ContentStatus @default(PUBLISHED)
+  createdAt DateTime      @default(now())
+
+  blog    Blog     @relation(fields: [blogId], references: [id], onDelete: Cascade)
+  author  User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  reports Report[]
+
+  @@index([blogId, createdAt])
+  @@map("comments")
+}
+
+model Fact {
+  id           String        @id @default(uuid())
+  authorId     String
+  text         String
+  category     FactCategory
+  sourceUrl    String?
+  status       ContentStatus @default(PUBLISHED)
+  searchVector Unsupported("tsvector")? @map("search_vector")  // generated column (raw SQL)
+  createdAt    DateTime      @default(now())
+
+  author    User       @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  likes     FactLike[]
+  bookmarks Bookmark[]
+  reports   Report[]
+
+  @@index([status, category, createdAt(sort: Desc)])
+  @@index([authorId])
+  @@map("facts")
+}
+
+model BlogLike {
+  userId    String
+  blogId    String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  blog Blog @relation(fields: [blogId], references: [id], onDelete: Cascade)
+
+  @@id([userId, blogId])                      // one like per user per blog
+  @@index([blogId])
+  @@map("blog_likes")
+}
+
+model FactLike {
+  userId    String
+  factId    String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fact Fact @relation(fields: [factId], references: [id], onDelete: Cascade)
+
+  @@id([userId, factId])
+  @@index([factId])
+  @@map("fact_likes")
+}
+
+model Bookmark {
+  id        String       @id @default(uuid())
+  userId    String
+  type      BookmarkType
+  targetKey String                            // "blog:<id>" | "fact:<id>" | "apod:2026-10-03" | "launch:<ll2-id>"
+  blogId    String?  @map("blog_id")          // set when type = BLOG (enables cascade)
+  factId    String?  @map("fact_id")          // set when type = FACT
+  snapshot  Json?                             // {title, imageUrl, url, date} so external items render without refetching
+  createdAt DateTime     @default(now())
+
+  user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  blog Blog? @relation(fields: [blogId], references: [id], onDelete: Cascade)
+  fact Fact? @relation(fields: [factId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, targetKey])               // no duplicate bookmarks
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("bookmarks")
+}
+
+model Report {
+  id           String       @id @default(uuid())
+  reporterId   String
+  blogId       String?  @map("blog_id")
+  factId       String?  @map("fact_id")
+  commentId    String?  @map("comment_id")
+  reason       ReportReason
+  details      String?
+  status       ReportStatus @default(OPEN)
+  resolvedById String?
+  resolvedAt   DateTime?
+  createdAt    DateTime     @default(now())
+
+  reporter User     @relation("Reporter", fields: [reporterId], references: [id], onDelete: Cascade)
+  resolver User?    @relation("Resolver", fields: [resolvedById], references: [id], onDelete: SetNull)
+  blog     Blog?    @relation(fields: [blogId], references: [id], onDelete: Cascade)
+  fact     Fact?    @relation(fields: [factId], references: [id], onDelete: Cascade)
+  comment  Comment? @relation(fields: [commentId], references: [id], onDelete: Cascade)
+
+  @@unique([reporterId, blogId])              // a user can report an item once
+  @@unique([reporterId, factId])
+  @@unique([reporterId, commentId])
+  @@index([status, createdAt])
+  @@map("reports")
+}
